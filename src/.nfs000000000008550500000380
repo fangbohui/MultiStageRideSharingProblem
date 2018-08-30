@@ -9,18 +9,17 @@ using namespace std;
 
 default_random_engine random_engine;
 const double eps = 1e-9;
-const bool isOutputMode = 1;
 const int seed = 23335;
 const int inf = 1 << 29;
 const int REGION_NUM = 30;
 const int DRIVER_NUM = 105;
 const int REQUEST_NUM = 400000;
-const int TIME_STEP = 60;
+const int TIME_STEP = 180;
 const int TOTAL_TIME_INTERVAL = 24 * (3600 / TIME_STEP); // TODO make the timestep be 1s when available
-const int TOTAL_TIMES = 50;
+const int TOTAL_TIMES = 100;
 
 const string mode = "file"; // "file" or "synthetic"
-const string stage1mode = "heuristic"; // "first-fit" or "heuristic"
+const string stage1mode = "first-fit"; // "first-fit" or "heuristic"
 const string stage2mode = "MDP"; // "normal" or "MDP" or "KM"
 // const string stage2mode = "KM"; // "normal" or "MDP" or "KM"
 const int BIG_DRIVER_NUM = 45000;
@@ -43,9 +42,8 @@ int ond_num = 200000;
 const int REAL_DRIVER_NUM = 50;
 const int REAL_PRE_NUM = 500;
 const int REAL_OND_NUM = 10000;
-const double default_ratio = 10.;
-const double pre_ratio = 0.5;
-const double ond_ratio = 1.00;
+double pre_ratio = 0.005; // 0.05;
+double ond_ratio = 0.095; // 0.95;
 double driver_ratio = 1.;
 int days = 10;
 
@@ -155,78 +153,6 @@ inline int remainedMission(int driver) {
     return int(drivers[driver].missions.size()) - drivers[driver].finished_work;
 }
 
-int total_pre_value = 0, total_ond_value = 0;
-int total_satisfied_pre_value = 0, total_satisfied_ond_value = 0;
-bool isChosenDriver[BIG_DRIVER_NUM];
-
-double g[REGION_NUM][REGION_NUM][TOTAL_TIME_INTERVAL];
-map<pair<int, int>, pair<int, double>> Map;
-double pre_computed_table[REGION_NUM][TOTAL_TIME_INTERVAL][REGION_NUM][TOTAL_TIME_INTERVAL];
-int time_stamp = 0;
-
-inline bool cmp_score(const pair<int, pair<double, double>> &a, const pair<int, pair<double, double>> &b) {
-    return a.second.first + a.second.second > b.second.first + b.second.second;
-}
-
-double calc_score_value(const int &v, const int &t, const int &v2, const int &t2) {
-//	if (check) cout << v << ' ' << t << endl;
-    if (v == v2 && t == t2) return 0;
-    if (Map[make_pair(v, t)].first == time_stamp) {
-        return Map[make_pair(v, t)].second;
-    }
-    vector<pair<int, pair<double, double>>> available_regions;
-    for (int d = 0; d < regions; d ++) {
-        if ((d == v2 ? 0 : dist[d][v2]) <= t2 - t - dist[v][d]) {
-            available_regions.push_back(make_pair(d, make_pair(V[v][d][t], calc_score_value(d, t + dist[v][d], v2, t2))));
-        }
-    }
-    sort(available_regions.begin(), available_regions.end(), cmp_score);
-    double d_star = 0;
-    for (auto tmp : available_regions) {
-        d_star = max(d_star, tmp.second.second);
-    }
-    // if (t == 0)
-    //     for (auto tmp : available_regions)
-    //         cerr << tmp.second.first << ' ' << tmp.second.second << endl;
-    if (v == v2 && t + 1 <= t2) {
-        d_star = max(d_star, calc_score_value(v, t + 1, v2, t2));
-    } else if (v != v2 && dist[v][v2] <= t2 - t - 1) {
-        d_star = max(d_star, calc_score_value(v, t + 1, v2, t2));
-    }
-    // if (t == 0) cerr << d_star << endl;
-    int j = -1;
-    for (int i = 0; i < available_regions.size(); i ++) {
-        if (available_regions[i].second.first + available_regions[i].second.second > d_star) {
-            j = i;
-        }
-    }
-    double p = 1.0, F = 0.0;
-    for (int i = 0; i <= j; i ++) {
-        int ai = available_regions[i].first;
-        F += p * Prob[v][ai][t][1] * (V[v][ai][t] + calc_score_value(ai, t + dist[v][ai], v2, t2));
-        p *= (1.0 - Prob[v][ai][t][1]);
-		if (p > 1. + eps) {
-			// cout << v << ' ' << ai<< ' ' << t << endl;
-			// cout << Prob[v][ai][t][1] << endl;
-			assert(false);
-		}
-    }
-	if (F < -eps) {
-	    // for (int i = 0; i <= j; i ++) {
-	    //     int ai = available_regions[i].first;
-		// 	cout << "prob " << p << " a[i] " << ai << endl;
-		// 	cout << "V " << V[v][ai][t] << " f() " << calc_score_value(ai, t + dist[v][ai], request) << endl;
-	    //     F += p * Prob[v][ai][t][1] * (V[v][ai][t] + calc_score_value(ai, t + dist[v][ai], request));
-	    //     p *= 1.0 - Prob[v][ai][t][1];
-	    // }
-		assert(false);
-	}
-    F += p * d_star;
-    Map[make_pair(v, t)].first = time_stamp;
-    Map[make_pair(v, t)].second = F;
-    return F;
-}
-
 void load_data(const string &mode) {
     if (mode == "file") {
         freopen("../data/distance.txt", "r", stdin);
@@ -244,7 +170,7 @@ void load_data(const string &mode) {
 		driver_num = total_driver_num;
         for (int i = 0; i < driver_num; i ++) {
             scanf("%d%d", &driver_time[i], &driver_src[i]);
-			driver_time[i] /= TIME_STEP;
+            driver_time[i] = 0;
         }
         freopen("../data/all_the_requests.txt", "r", stdin);
         pre_num = 0;
@@ -276,6 +202,7 @@ void load_data(const string &mode) {
                 dist[i][j] /= TIME_STEP;
             }
         for (int i = 0; i < driver_num; i ++) {
+            driver_time[i] = 0;
             driver_src[i] = random_engine() % regions;
             drivers[i] = ActiveDriver(i);
         }
@@ -321,8 +248,8 @@ void load_data(const string &mode) {
                 for (int k = 0; k < TOTAL_TIME_INTERVAL; k ++)
                     if (Count[i][j][k] >= 1) {
                         for (int l = 1; l <= Count[i][j][k]; l++) {
-                            Prob[i][j][k][l] += 1.0 / days / default_ratio;
-                            initProb[i][j][k][l] += 1.0 / days / default_ratio;
+                            Prob[i][j][k][l] += 1.0 / days;
+                            initProb[i][j][k][l] += 1.0 / days;
 							assert(Prob[i][j][k][l] <= 1. + eps && Prob[i][j][k][l] >= 0);
 						}
                         Count[i][j][k] = 0;
@@ -346,127 +273,11 @@ void load_data(const string &mode) {
     }
     printf("We have %d drivers.\n", driver_num);
     printf("We have %d offline requests.\n", offline_requests.size());
-
-    time_t start_t, end_t;
-    time(&start_t);
-	memset(pre_computed_table, 0, sizeof(pre_computed_table));
-    for (int v2 = 0; v2 < regions; v2 ++) {
-		cout << v2 << endl;
-        for (int t2 = 0; t2 < TOTAL_TIME_INTERVAL; t2 ++) {
-            time_stamp ++;
-			Map.clear();
-            for (int v = 0; v < regions; v ++)
-                for (int t = 0; t < t2; t ++) {
-                    pre_computed_table[v][t][v2][t2] = calc_score_value(v, t, v2, t2);
-                }
-        }
-	}
-    time(&end_t);
-    Map.clear();
-	cout << start_t << ' ' << end_t << endl;
-    printf("After %d seconds, we have computed all the values in Lool-Up Table.\n", difftime(start_t, end_t));
 }
 
-struct EdgeList {
-    int size;
-    int last[10000000];
-    int succ[10000000], other[10000000], flow[10000000], cost[10000000];
-    void clear(int n) {
-        size = 0;
-        std::fill(last, last + n, -1);
-    }
-    void add(int x, int y, int c, int w) {
-        succ[size] = last[x];
-        last[x] = size;
-        other[size] = y;
-        flow[size] = c;
-        cost[size++] = w;
-    }
-} e;
-
-int n, source, target;
-int previous[10000000];
-
-void add_edge(int x, int y, int c, int w) {
-	// cout << x << ' ' << y << ' ' << c << ' ' << w << endl;
-    e.add(x, y, c, w);
-    e.add(y, x, 0, -w);
-}
-
-bool augment() {
-    static int dist[10000000], occur[10000000];
-    std::vector<int> queue;
-    std::fill(dist, dist + n, -1);
-    std::fill(occur, occur + n, 0);
-    dist[source] = 0;
-    occur[source] = true;
-    queue.push_back(source);
-    for (int head = 0; head < (int)queue.size(); ++head) {
-        int x = queue[head];
-        for (int i = e.last[x]; ~i; i = e.succ[i]) {
-            int y = e.other[i];
-            if (e.flow[i] && dist[y] < dist[x] + e.cost[i]) {
-                dist[y] = dist[x] + e.cost[i];
-                previous[y] = i;
-                if (!occur[y]) {
-                    occur[y] = true;
-                    queue.push_back(y);
-                }
-            }
-        }
-        occur[x] = false;
-    }
-    return dist[target] > 0;
-}
-
-int max_flow() {
-    std::pair<int, int> answer = std::make_pair(0, 0);
-    while (augment()) {
-        int number = INT_MAX;
-        for (int i = target; i != source; i = e.other[previous[i] ^ 1]) {
-            number = std::min(number, e.flow[previous[i]]);
-        }
-        answer.first += number;
-        for (int i = target; i != source; i = e.other[previous[i] ^ 1]) {
-            e.flow[previous[i]] -= number;
-            e.flow[previous[i] ^ 1] += number;
-            answer.second += number * e.cost[previous[i]];
-        }
-    }
-    return answer.second;
-}
-
-double calc_offline() {
-	n = pre_requests.size() * 2 + driver_num * 2 + 2;
-	source = n - 1;
-	target = n - 2;
-	e.clear(n);
-	for (int i = 0; i < pre_requests.size(); i ++) {
-		SimpleRequest r1 = pre_requests[i];
-		add_edge(2 * i, 2 * i + 1, 1, r1.trip_time);
-		for (int j = 0; j < pre_requests.size(); j ++) {
-			SimpleRequest r2 = pre_requests[j];
-			if (r1.start_time + r1.trip_time + (r1.destination == r2.source ? 0 : dist[r1.destination][r2.source]) <= r2.start_time) {
-				add_edge(2 * i + 1, 2 * j, 1, 0);
-			}
-		}
-		for (int j = 0; j < driver_num; j ++) {
-			if (drivers[j].time + (r1.source == drivers[j].u ? 0 : dist[drivers[j].u][r1.source]) <= r1.start_time) {
-				add_edge(pre_requests.size() * 2 + 2 * j, 2 * i, 1, 0);
-			}
-			if (r1.start_time + r1.trip_time + (r1.destination == drivers[j].u ? 0 : dist[r1.destination][drivers[j].u]) < TOTAL_TIME_INTERVAL) {
-				add_edge(2 * i + 1, pre_requests.size() * 2 + 2 * j + 1, 1, 0);
-			}
-		}
-	}
-	for (int i = 0; i < driver_num; i ++) {
-		add_edge(source, pre_requests.size() * 2 + i * 2, 1, 0);
-		add_edge(pre_requests.size() * 2 + i * 2 + 1, target, 1, 0);
-	}
-	return max_flow();
-}
-
-double offline_value;
+int total_pre_value = 0, total_ond_value = 0;
+int total_satisfied_pre_value = 0, total_satisfied_ond_value = 0;
+bool isChosenDriver[BIG_DRIVER_NUM];
 
 void sample_in_distribution() {
 	memset(isChosenDriver, 0, sizeof(isChosenDriver));
@@ -518,14 +329,13 @@ void sample_in_distribution() {
 		                sr.isPre = 1;
 	                    sr.order = pre_num ++;
 	                    pre_requests.push_back(sr);
+		            } else if (random_value < pre_ratio + ond_ratio - eps) {
+		                sr.isPre = 0;
+	                    sr.order = ond_num ++;
+	                    ond_requests.push_back(sr);
 		            }
-	                sr.isPre = 0;
-                    sr.order = ond_num ++;
-                    ond_requests.push_back(sr);
 				}
 			}
-    random_shuffle(ond_requests.begin(), ond_requests.end());
-    random_shuffle(pre_requests.begin(), pre_requests.end());
     satisfied_ond = satisfied_pre = 0;
 	total_pre_value = 0;
 	total_ond_value = 0;
@@ -537,15 +347,12 @@ void sample_in_distribution() {
 	for (auto tmp : ond_requests) {
 		total_ond_value += tmp.trip_time;
 	}
-    if (isOutputMode) {
-        printf("We have %d pre-scheduled requests, whose total value is %d.\n", pre_requests.size(), total_pre_value);
-        printf("We have %d on-demand requests, whose total value is %d.\n", ond_requests.size(), total_ond_value);
-    }
-	// offline_value = calc_offline();
+    printf("We have %d pre-scheduled requests, whose total value is %d.\n", pre_requests.size(), total_pre_value);
+    printf("We have %d on-demand requests, whose total value is %d.\n", ond_requests.size(), total_ond_value);
 }
 
 void greedy_algorithm() {
-	if (isOutputMode) puts("We are using First-Fit algorithm in stage-1.");
+	puts("We are using First-Fit algorithm in stage-1.");
     for (int i = 0; i < driver_num; i ++) {
         drivers[i].missions.clear();
         SimpleRequest sr;
@@ -566,7 +373,6 @@ void greedy_algorithm() {
     satisfied_pre = 0;
     for (int i = 0; i < pre_num; i ++) {
         for (int j = 0; j < driver_num; j ++) {
-			if (drivers[j].time >= pre_requests[i].start_time) continue;
 			int pos;
 			for (pos = 0; pos < drivers[j].missions.size(); pos ++) {
 				if (drivers[j].missions[pos].start_time > pre_requests[i].start_time){
@@ -592,17 +398,83 @@ void greedy_algorithm() {
 	for (int i = 0; i < driver_num; i ++) {
 		drivers[i].missions.erase(drivers[i].missions.begin());
 	}
-	if (isOutputMode) {
-    	puts("Performance:--------------------");
-        printf("We have handled %d pre-requests of all the %d pre-requests. "
-               "Percentage: %.2f%%.\n", satisfied_pre, pre_num, double(100.0 * satisfied_pre / pre_num));
-        printf("We have handled %d values of all the %d values in pre-requests. "
-               "Percentage: %.2f%%.\n", total_satisfied_pre_value, total_pre_value, double(100.0 * total_satisfied_pre_value / total_pre_value));
-   }
+	puts("Performance:--------------------");
+    printf("We have handled %d pre-requests of all the %d pre-requests. "
+           "Percentage: %.2f%%.\n", satisfied_pre, pre_num, double(100.0 * satisfied_pre / pre_num));
+    printf("We have handled %d values of all the %d values in pre-requests. "
+           "Percentage: %.2f%%.\n", total_satisfied_pre_value, total_pre_value, double(100.0 * total_satisfied_pre_value / total_pre_value));
+}
+
+inline bool cmp_score(const pair<int, pair<double, double>> &a, const pair<int, pair<double, double>> &b) {
+    return a.second.first + a.second.second > b.second.first + b.second.second;
+}
+
+double g[REGION_NUM][REGION_NUM][TOTAL_TIME_INTERVAL];
+
+map<pair<int, int>, pair<int, double>> Map;
+int time_stamp = 0;
+
+double calc_score_value(const int &v, const int &t, const SimpleRequest &request) {
+//	if (check) cout << v << ' ' << t << endl;
+    if (v == request.source && t == request.start_time) return 0;
+    if (Map[make_pair(v, t)].first == time_stamp) {
+        return Map[make_pair(v, t)].second;
+    }
+    vector<pair<int, pair<double, double>>> available_regions;
+    for (int d = 0; d < regions; d ++) {
+        if ((d == request.source ? 0 : dist[d][request.source]) <= request.start_time - t - dist[v][d]) {
+            available_regions.push_back(make_pair(d, make_pair(V[v][d][t], calc_score_value(d, t + dist[v][d], request))));
+        }
+    }
+    sort(available_regions.begin(), available_regions.end(), cmp_score);
+    double d_star = 0;
+    for (auto tmp : available_regions) {
+        d_star = max(d_star, tmp.second.second);
+    }
+    // if (t == 0)
+    //     for (auto tmp : available_regions)
+    //         cerr << tmp.second.first << ' ' << tmp.second.second << endl;
+    if (v == request.source && t + 1 <= request.start_time) {
+        d_star = max(d_star, calc_score_value(v, t + 1, request));
+    } else if (v != request.source && dist[v][request.source] <= request.start_time - t - 1) {
+        d_star = max(d_star, calc_score_value(v, t + 1, request));
+    }
+    // if (t == 0) cerr << d_star << endl;
+    int j = -1;
+    for (int i = 0; i < available_regions.size(); i ++) {
+        if (available_regions[i].second.first + available_regions[i].second.second > d_star) {
+            j = i;
+        }
+    }
+    double p = 1.0, F = 0.0;
+    for (int i = 0; i <= j; i ++) {
+        int ai = available_regions[i].first;
+        F += p * Prob[v][ai][t][1] * (V[v][ai][t] + calc_score_value(ai, t + dist[v][ai], request));
+        p *= (1.0 - Prob[v][ai][t][1]);
+		if (p > 1. + eps) {
+			// cout << v << ' ' << ai<< ' ' << t << endl;
+			// cout << Prob[v][ai][t][1] << endl;
+			assert(false);
+		}
+    }
+	if (F < -eps) {
+	    // for (int i = 0; i <= j; i ++) {
+	    //     int ai = available_regions[i].first;
+		// 	cout << "prob " << p << " a[i] " << ai << endl;
+		// 	cout << "V " << V[v][ai][t] << " f() " << calc_score_value(ai, t + dist[v][ai], request) << endl;
+	    //     F += p * Prob[v][ai][t][1] * (V[v][ai][t] + calc_score_value(ai, t + dist[v][ai], request));
+	    //     p *= 1.0 - Prob[v][ai][t][1];
+	    // }
+		assert(false);
+	}
+    F += p * d_star;
+    Map[make_pair(v, t)].first = time_stamp;
+    Map[make_pair(v, t)].second = F;
+    return F;
 }
 
 void heuristic_algorithm() {
-    if (isOutputMode) puts("We are using the heuristic algorithm in stage-1.");
+	puts("We are using the heuristic algorithm in stage-1.");
     for (int i = 0; i < driver_num; i ++) {
         drivers[i].missions.clear();
         SimpleRequest sr;
@@ -625,12 +497,11 @@ void heuristic_algorithm() {
     int cc = 0;
     for (int i = 0; i < pre_num; i ++) {
         if (i % 10 == 0) {
-            // printf("We have dealt with %d pre-scheduled requests.\n", i);
+            printf("We have dealt with %d pre-scheduled requests.\n", i);
         }
 		int best_j = -1, best_pos = -1;
 		double best_value = 0, best_origin = -(1 << 30);
         for (int j = 0; j < driver_num; j ++) {
-			if (drivers[j].time >= pre_requests[i].start_time) continue;
 			int pos;
 			for (pos = 0; pos < drivers[j].missions.size(); pos ++) {
 				if (drivers[j].missions[pos].start_time > pre_requests[i].start_time){
@@ -648,17 +519,16 @@ void heuristic_algorithm() {
 				int v2 = pre_requests[i].destination;
 				int t2 = pre_requests[i].start_time + pre_requests[i].trip_time;
 				time_stamp ++;
-				double tmp1 = pre_computed_table[v1][t1][drivers[j].missions[pos].source][drivers[j].missions[pos].start_time];
+				double tmp1 = calc_score_value(v1, t1, drivers[j].missions[pos]);
                 // cout << "---" << v1 << ' ' << t1 << ' ' << drivers[j].missions[pos].source << ' ' << drivers[j].missions[pos].start_time << ' ' << tmp1 << endl;
-				double tmp2 = pre_computed_table[v2][t2][drivers[j].missions[pos].source][drivers[j].missions[pos].start_time];
+				double tmp2 = calc_score_value(v2, t2, drivers[j].missions[pos]);
                 // cout << v2 << ' ' << t2 << ' ' << drivers[j].missions[pos].source << ' ' << drivers[j].missions[pos].start_time << ' ' << tmp2 << endl;
 				tmp2 += pre_requests[i].trip_time;
                 // cout << tmp2 << endl;
 				time_stamp ++;
-				tmp2 += pre_computed_table[v1][t1][pre_requests[i].source][pre_requests[i].start_time];
+				tmp2 += calc_score_value(v1, t1, pre_requests[i]);
                 // cout << v1 << ' ' << t1 << ' ' << pre_requests[i].source << ' ' << pre_requests[i].start_time << ' ' << tmp2 << endl;
 				double value = calc_heuristic_score_function(tmp2 - tmp1);
-				// double value = tmp2 - tmp1;
 				if (best_j == -1 || value > best_value) {
 					best_j = j;
 					best_pos = pos;
@@ -668,37 +538,31 @@ void heuristic_algorithm() {
                 // cout << best_value << ' ' << best_origin << endl;
             }
         }
-        // best_value += 3.27986;
+        best_value += 7.46297;
         if (best_j == -1) continue;
         if (best_value > 0 || U(random_engine) < exp(best_value)){
-        // if (best_value > 0){
-			drivers[best_j].missions.insert(drivers[best_j].missions.begin() + best_pos, pre_requests[i]);
-			satisfied_pre ++;
-			total_satisfied_pre_value += pre_requests[i].trip_time;
-        } // else {
+    		drivers[best_j].missions.insert(drivers[best_j].missions.begin() + best_pos, pre_requests[i]);
+    		satisfied_pre ++;
+    		total_satisfied_pre_value += pre_requests[i].trip_time;
+        } else {
             // cout << best_value << ' ' << best_origin << endl;
-        // }
+        }
         bb += best_value;
         cc += 1;
     }
-    if (isOutputMode) {
-        cout << bb / cc << endl;
-        cout << VALUE1 / COUNT << endl;
-    }
+    cout << bb / cc << endl;
+    cout << VALUE1 / COUNT << endl;
 	// necessary operation because of implementation
 	for (int i = 0; i < driver_num; i ++) {
 		drivers[i].missions.erase(drivers[i].missions.begin());
         for (int j = 0; j < drivers[i].missions.size() - 1; j ++)
             assert(drivers[i].missions[j].start_time <= drivers[i].missions[j + 1].start_time);
 	}
-
-	if (isOutputMode) {
-    	puts("Performance:--------------------");
-        printf("We have handled %d pre-requests of all the %d pre-requests. "
-               "Percentage: %.2f%%.\n", satisfied_pre, pre_num, double(100.0 * satisfied_pre / pre_num));
-        printf("We have handled %d values of all the %d values in pre-requests. "
-               "Percentage: %.2f%%.\n", total_satisfied_pre_value, total_pre_value, double(100.0 * total_satisfied_pre_value / total_pre_value));
-   }
+	puts("Performance:--------------------");
+    printf("We have handled %d pre-requests of all the %d pre-requests. "
+           "Percentage: %.2f%%.\n", satisfied_pre, pre_num, double(100.0 * satisfied_pre / pre_num));
+    printf("We have handled %d values of all the %d values in pre-requests. "
+           "Percentage: %.2f%%.\n", total_satisfied_pre_value, total_pre_value, double(100.0 * total_satisfied_pre_value / total_pre_value));
 }
 
 void GetPlan(const int &v, const int &t, const int &c, const double &x, const SimpleRequest &r) {
@@ -706,7 +570,7 @@ void GetPlan(const int &v, const int &t, const int &c, const double &x, const Si
     vector<pair<int, pair<double, double>>> available_regions;
     for (int d = 0; d < regions; d ++) {
         if ((d == r.source ? 0 : dist[d][r.source]) <= r.start_time - t - dist[v][d]) {
-            available_regions.push_back(make_pair(d, make_pair(V[v][d][t], calc_score_value(d, t + dist[v][d], r.source, r.start_time))));
+            available_regions.push_back(make_pair(d, make_pair(V[v][d][t], calc_score_value(d, t + dist[v][d], r))));
         }
     }
     /*
@@ -725,7 +589,7 @@ void GetPlan(const int &v, const int &t, const int &c, const double &x, const Si
         }
     }
     if (v == r.source && t + 1 <= r.start_time || v != r.source && dist[v][r.source] <= r.start_time - t - 1) {
-        double tmp = calc_score_value(v, t + 1, r.source, r.start_time);
+        double tmp = calc_score_value(v, t + 1, r);
         if (d_star < tmp) {
             d_star = tmp;
             d_index = -2;
@@ -761,7 +625,7 @@ void TopoUpdate(const int &v, const int &t, const int &c, const double &x, const
     vector<pair<int, pair<double, double>>> available_regions;
     for (int d = 0; d < regions; d ++) {
         if ((d == r.source ? 0 : dist[d][r.source]) <= r.start_time - t - dist[v][d]) {
-            available_regions.push_back(make_pair(d, make_pair(V[v][d][t], calc_score_value(d, t + dist[v][d], r.source, r.start_time))));
+            available_regions.push_back(make_pair(d, make_pair(V[v][d][t], calc_score_value(d, t + dist[v][d], r))));
         }
     }
     /*
@@ -780,7 +644,7 @@ void TopoUpdate(const int &v, const int &t, const int &c, const double &x, const
         }
     }
     if (v == r.source && t + 1 <= r.start_time || v != r.source && dist[v][r.source] <= r.start_time - t - 1) {
-        double tmp = calc_score_value(v, t + 1, r.source, r.start_time);
+        double tmp = calc_score_value(v, t + 1, r);
         if (d_star < tmp) {
             d_star = tmp;
             d_index = -2;
@@ -870,7 +734,7 @@ pair<int, int> ChooseAction(const int &c, const int &v, const int &t) {
         if (sr.start_time != t || sr.source != v) continue;
         int d = sr.destination;
         if (dist[d][r.source] <= r.start_time - t - sr.trip_time) {
-            double tmp = sr.trip_time + calc_score_value(sr.destination, t + sr.trip_time, r.source, r.start_time);
+            double tmp = sr.trip_time + calc_score_value(sr.destination, t + sr.trip_time, r);
             if (best_action == -1 || tmp > best_value) {
                 best_action = i;
                 best_value = tmp;
@@ -886,7 +750,7 @@ pair<int, int> ChooseAction(const int &c, const int &v, const int &t) {
         int d = i;
         if ((d == r.source ? 0 : dist[d][r.source]) <= r.start_time - t - (i == v ? 1 : dist[v][i])) {
         // if ((d == r.source ? 0 : dist[d][r.source]) <= r.start_time - t - (i == v ? 1 : dist[v][i])) {
-            double tmp = calc_score_value(d, t + (i == v ? 1 : dist[v][i]), r.source, r.start_time);
+            double tmp = calc_score_value(d, t + (i == v ? 1 : dist[v][i]), r);
             if (best_action == -1 || tmp > best_value) {
                 best_action = i;
                 best_value = tmp;
@@ -989,7 +853,7 @@ void SequentialAlgorithm(const int &t) {
 }
 
 void simulation_MDP() {
-    if (isOutputMode) puts("We are using MDP algorithm in stage-2.\n");
+	puts("We are using MDP algorithm in stage-2.\n");
 	// printMissions(0);
 	Map.clear();
 	ond_requests_time.clear();
@@ -1005,13 +869,11 @@ void simulation_MDP() {
         if (T > 0 && T % (3600 / TIME_STEP) == 0) printf("Hour : %d\n", T / (3600 / TIME_STEP));
         SequentialAlgorithm(T);
     }
-    if (isOutputMode) {
-    	puts("Performance:--------------------");
-        printf("We have handled %d on-demand requests of all the %d on-demand requests. "
-               "Percentage: %.2f%%.\n", satisfied_ond, ond_num, double(100.0 * satisfied_ond / ond_num));
-        printf("We have handled %d values of all the %d values in on-demand requests. "
-               "Percentage: %.2f%%.\n", total_satisfied_ond_value, total_ond_value, double(100.0 * total_satisfied_ond_value / total_ond_value));
-   }
+	puts("Performance:--------------------");
+    printf("We have handled %d on-demand requests of all the %d on-demand requests. "
+           "Percentage: %.2f%%.\n", satisfied_ond, ond_num, double(100.0 * satisfied_ond / ond_num));
+    printf("We have handled %d values of all the %d values in on-demand requests. "
+           "Percentage: %.2f%%.\n", total_satisfied_ond_value, total_ond_value, double(100.0 * total_satisfied_ond_value / total_ond_value));
 }
 
 int nx, ny;
@@ -1110,7 +972,7 @@ void KM_Algorithm(const int &t) {
 			if (sr.start_time != t || sr.source != drivers[c].u) continue;
 			int d = sr.destination;
 			if (dist[d][r.source] <= r.start_time - t - sr.trip_time) {
-				KM.w[c + 1][i + 1] = sr.trip_time + calc_score_value(sr.destination, t + sr.trip_time, r.source, r.start_time);
+				KM.w[c + 1][i + 1] = sr.trip_time + calc_score_value(sr.destination, t + sr.trip_time, r);
 				can_pick = true;
 			}
 		}
@@ -1150,7 +1012,7 @@ void KM_Algorithm(const int &t) {
 }
 
 void simulation_KM() {
-    if (isOutputMode) puts("We are using KM algorithm in stage-2.");
+	puts("We are using KM algorithm in stage-2.");
 	// for(int i = 0; i < regions; i ++) {
 	// 	for (int j = 0; j < regions; j ++)
 	// 		cout << dist[i][j] << ' ' ;
@@ -1168,18 +1030,16 @@ void simulation_KM() {
 	for (int T = 0; T < TOTAL_TIME_INTERVAL; T ++) {
 		max_size = max(max_size, int(ond_requests_time[T].size()));
 	}
-    if (isOutputMode) cout << "There are at most " << max_size << " requests in one time step." << endl;
+	cout << "There are at most " << max_size << " requests in one time step." << endl;
     for (int T = 0; T < TOTAL_TIME_INTERVAL; T ++) {
         //if (T > 0 && T % (3600 / TIME_STEP) == 0) printf("Hour : %d\n", T / (3600 / TIME_STEP));
         KM_Algorithm(T);
     }
-    if (isOutputMode) {
-    	puts("Performance:--------------------");
-        printf("We have handled %d on-demand requests of all the %d on-demand requests. "
-               "Percentage: %.2f%%.\n", satisfied_ond, ond_num, double(100.0 * satisfied_ond / ond_num));
-        printf("We have handled %d values of all the %d values in on-demand requests. "
-               "Percentage: %.2f%%.\n", total_satisfied_ond_value, total_ond_value, double(100.0 * total_satisfied_ond_value / total_ond_value));
-   }
+	puts("Performance:--------------------");
+    printf("We have handled %d on-demand requests of all the %d on-demand requests. "
+           "Percentage: %.2f%%.\n", satisfied_ond, ond_num, double(100.0 * satisfied_ond / ond_num));
+    printf("We have handled %d values of all the %d values in on-demand requests. "
+           "Percentage: %.2f%%.\n", total_satisfied_ond_value, total_ond_value, double(100.0 * total_satisfied_ond_value / total_ond_value));
 }
 
 bool isLegalSequence_impatient(const SimpleRequest &request, const vector<SimpleRequest> &tmp2, int driver, const int &T) {
@@ -1457,40 +1317,17 @@ void arrange() {
     }
 }
 
-double calc_mu() {
-	int mx = 0;
-	int mn = 1 << 28;
-	for (auto tmp : pre_requests) {
-		mx = max(mx, tmp.trip_time);
-		mn = min(mn, tmp.trip_time);
-	}
-	return 1.0 * mx / mn;
-}
-
 int main() {
     random_engine.seed(seed);
     load_data(mode);
 	pair<double, double> performance = make_pair(0., 0.);
-    int avg_pre_num = 0;
-    int avg_ond_num = 0;
-    int avg_pre_value = 0;
-    int avg_ond_value = 0;
 	for (times = 0; times < TOTAL_TIMES; times ++) {
 		printf("\nRound %d:\n", times);
 		arrange();
 		performance.first += total_satisfied_pre_value;
 		performance.second += total_satisfied_ond_value;
-        avg_pre_num += pre_num;
-        avg_ond_num += ond_num;
-        avg_pre_value += total_pre_value;
-        avg_ond_value += total_ond_value;
-        cout << "AVG pre number : " << avg_pre_num / (times + 1) << endl;
-        cout << "AVG pre value : " << avg_pre_value / (times + 1) << endl;
-        cout << "AVG ond number : " << avg_ond_num / (times + 1) << endl;
-        cout << "AVG ond value : " << avg_ond_value / (times + 1) << endl;
 		cout << "pre-scheduled stage-1 Avg : " << performance.first / (times + 1) << endl;
 		cout << "on demand stage-2 Avg : " << performance.second / (times + 1) << endl;
-		puts("random value weak rejection");
 	}
     return 0;
 }
