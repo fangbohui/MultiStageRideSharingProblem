@@ -8,6 +8,7 @@
 using namespace std;
 
 default_random_engine random_engine;
+default_random_engine random_engine2;
 const double eps = 1e-9;
 const bool isOutputMode = 1;
 const int seed = 23335;
@@ -16,13 +17,19 @@ const int REGION_NUM = 30;
 const int DRIVER_NUM = 105;
 const int REQUEST_NUM = 400000;
 const int TIME_STEP = 60;
-const int TOTAL_TIME_INTERVAL = 24 * (3600 / TIME_STEP); // TODO make the timestep be 1s when available
-const int TOTAL_TIMES = 50;
+const int TOTAL_TIME_INTERVAL = 24 * (3600 / TIME_STEP);
+const string mode = "file"; 			// "file" or "synthetic"
 
-const string mode = "file"; // "file" or "synthetic"
-const string stage1mode = "heuristic"; // "first-fit" or "heuristic"
-const string stage2mode = "MDP"; // "normal" or "MDP" or "KM"
-// const string stage2mode = "KM"; // "normal" or "MDP" or "KM"
+const int TOTAL_TIMES = 50;
+const int TIMES_FOR_ONE_DISTRIBUTION = 20;
+
+const string Valuemode = "no"; 			// "random" or "no"
+const string Rejectionmode = "no"; 		// "random" or "strong" or "no"
+const string KMmode = "without future"; // "with future" or " "without future""
+// const string stage1mode = "first-fit"; 	// "first-fit" or "heuristic"
+// const string stage2mode = "KM"; 		// "normal" or "MDP" or "KM"
+const string stage1mode = "heuristic"; 	// "first-fit" or "heuristic"
+const string stage2mode = "MDP"; 		// "normal" or "MDP" or "KM"
 const int BIG_DRIVER_NUM = 45000;
 
 // manual settings for "synthetic" mode
@@ -41,10 +48,8 @@ int ond_num = 200000;
 
 // manual settings for "file" mode
 const int REAL_DRIVER_NUM = 50;
-const int REAL_PRE_NUM = 500;
-const int REAL_OND_NUM = 10000;
-const double default_ratio = 10.;
-const double pre_ratio = 0.5;
+const double default_ratio = 10;
+const double pre_ratio = 0.05;
 const double ond_ratio = 1.00;
 double driver_ratio = 1.;
 int days = 10;
@@ -60,7 +65,7 @@ int COUNT = 0;
 int times;
 
 double calc_heuristic_score_function(double delta) {
-	double alpha = U(random_engine);
+	double alpha = U(random_engine2);
 	double rank = exp(k * alpha);
     VALUE1 += delta;
     COUNT ++;
@@ -99,11 +104,11 @@ double initProb[REGION_NUM][REGION_NUM][TOTAL_TIME_INTERVAL * 2][DRIVER_NUM];
 double V[REGION_NUM][REGION_NUM][TOTAL_TIME_INTERVAL * 2];
 
 struct ActiveDriver {
-    int driver, time;
+    int driver, time, number;
     int u, v, length, finished_work;
     int type; // 0 means ilde, 1 means full
     vector<SimpleRequest> missions;
-    ActiveDriver(int driver = -1) : driver(driver), time(driver_time[driver]), u(driver_src[driver]), v(-1), length(-1), finished_work(0), type(0), missions() {}
+    ActiveDriver(int driver = -1) : driver(driver), time(driver_time[driver]), number(driver), u(driver_src[driver]), v(-1), length(-1), finished_work(0), type(0), missions() {}
 } drivers[DRIVER_NUM];
 
 struct Event {
@@ -364,7 +369,7 @@ void load_data(const string &mode) {
     time(&end_t);
     Map.clear();
 	cout << start_t << ' ' << end_t << endl;
-    printf("After %d seconds, we have computed all the values in Lool-Up Table.\n", difftime(start_t, end_t));
+    printf("After %d seconds, we have computed all the values in Lool-Up Table.\n", end_t - start_t);
 }
 
 struct EdgeList {
@@ -477,6 +482,7 @@ void sample_in_distribution() {
 			driver = random_engine() % driver_num;
 		}
 		isChosenDriver[driver] = true;
+		drivers[i].number = driver;
         drivers[i].time = driver_time[driver];
 		drivers[i].u = driver_src[driver];
 		drivers[i].v = -1;
@@ -513,12 +519,20 @@ void sample_in_distribution() {
                 }
                 if (cnt <= 0) continue;
                 while (cnt --) {
-					double random_value = 1.0 * (random_engine() % 10000) / 10000;
-					if (random_value < pre_ratio - eps) {
+					if (pre_ratio <= 1.) {
+						double random_value = 1.0 * (random_engine() % 10000) / 10000;
+						if (random_value < pre_ratio - eps) {
+			                sr.isPre = 1;
+		                    sr.order = pre_num ++;
+		                    pre_requests.push_back(sr);
+			            }
+					} else {
 		                sr.isPre = 1;
-	                    sr.order = pre_num ++;
-	                    pre_requests.push_back(sr);
-		            }
+						for (int times = 0; times < int(pre_ratio); times ++){
+	                    	sr.order = pre_num ++;
+							pre_requests.push_back(sr);
+						}
+					}
 	                sr.isPre = 0;
                     sr.order = ond_num ++;
                     ond_requests.push_back(sr);
@@ -541,7 +555,23 @@ void sample_in_distribution() {
         printf("We have %d pre-scheduled requests, whose total value is %d.\n", pre_requests.size(), total_pre_value);
         printf("We have %d on-demand requests, whose total value is %d.\n", ond_requests.size(), total_ond_value);
     }
-	// offline_value = calc_offline();
+	offline_value = calc_offline();
+}
+
+void reset_for_same_distribution() {
+	for (int i = 0; i < driver_num; i ++) {
+		int driver = drivers[i].number;
+        drivers[i].time = driver_time[driver];
+		drivers[i].u = driver_src[driver];
+		drivers[i].v = -1;
+		drivers[i].length = 0;
+		drivers[i].type = 0;
+		drivers[i].missions.clear();
+		drivers[i].finished_work = 0;
+	}
+    satisfied_ond = satisfied_pre = 0;
+	total_satisfied_pre_value = 0;
+	total_satisfied_ond_value = 0;
 }
 
 void greedy_algorithm() {
@@ -657,8 +687,14 @@ void heuristic_algorithm() {
 				time_stamp ++;
 				tmp2 += pre_computed_table[v1][t1][pre_requests[i].source][pre_requests[i].start_time];
                 // cout << v1 << ' ' << t1 << ' ' << pre_requests[i].source << ' ' << pre_requests[i].start_time << ' ' << tmp2 << endl;
-				double value = calc_heuristic_score_function(tmp2 - tmp1);
-				// double value = tmp2 - tmp1;
+				double value;
+				if (Valuemode == "random") {
+					value = calc_heuristic_score_function(tmp2 - tmp1);
+				} else if (Valuemode == "no") {
+					value = tmp2 - tmp1;
+				} else {
+					assert(false);
+				}
 				if (best_j == -1 || value > best_value) {
 					best_j = j;
 					best_pos = pos;
@@ -670,12 +706,16 @@ void heuristic_algorithm() {
         }
         // best_value += 3.27986;
         if (best_j == -1) continue;
-        if (best_value > 0 || U(random_engine) < exp(best_value)){
-        // if (best_value > 0){
+		bool taken = false;
+        if (Rejectionmode == "random" && (best_value > 0 || U(random_engine2) < exp(best_value))) taken = true;
+        if (Rejectionmode == "strong" && best_value > 0) taken = true;
+		if (Rejectionmode == "no") taken = true;
+		if (taken) {
 			drivers[best_j].missions.insert(drivers[best_j].missions.begin() + best_pos, pre_requests[i]);
 			satisfied_pre ++;
 			total_satisfied_pre_value += pre_requests[i].trip_time;
-        } // else {
+		}
+        // } // else {
             // cout << best_value << ' ' << best_origin << endl;
         // }
         bb += best_value;
@@ -1110,7 +1150,13 @@ void KM_Algorithm(const int &t) {
 			if (sr.start_time != t || sr.source != drivers[c].u) continue;
 			int d = sr.destination;
 			if (dist[d][r.source] <= r.start_time - t - sr.trip_time) {
-				KM.w[c + 1][i + 1] = sr.trip_time + calc_score_value(sr.destination, t + sr.trip_time, r.source, r.start_time);
+				if (KMmode == "with future") {
+					KM.w[c + 1][i + 1] = sr.trip_time + calc_score_value(sr.destination, t + sr.trip_time, r.source, r.start_time);
+				} else if (KMmode == "without future") {
+					KM.w[c + 1][i + 1] = sr.trip_time;
+				} else {
+					assert(false);
+				}
 				can_pick = true;
 			}
 		}
@@ -1124,6 +1170,17 @@ void KM_Algorithm(const int &t) {
 	        	drivers[c].v = -1;
 	        }
         }
+		// else {
+		// 	int d = random_engine() % regions;
+		// 	if (d == drivers[c].u) continue;
+		// 	while (t + dist[drivers[c].u][d] + (d == r.source ? 0 : dist[d][r.source]) > r.start_time) {
+		// 		d = random_engine() % regions;
+		// 		if (d == drivers[c].u) break;
+		// 	}
+		// 	if (d == drivers[c].u) continue;
+		// 	drivers[c].v = d;
+		// 	drivers[c].length = dist[drivers[c].u][d] - 1;
+		// }
     }
 	KM.solve();
 	// std::cerr << nx << ' ' << ny << '\n';
@@ -1182,42 +1239,6 @@ void simulation_KM() {
    }
 }
 
-bool isLegalSequence_impatient(const SimpleRequest &request, const vector<SimpleRequest> &tmp2, int driver, const int &T) {
-    if (drivers[driver].type == 0 && drivers[driver].v == -1 && drivers[driver].u == tmp2[0].source) { // empty car
-        // already at the start point
-        bool ok = true;
-        int t = max(T, driver_time[driver]);
-        for (int i = 0; i < tmp2.size(); i ++) {
-            if (t <= tmp2[i].start_time) {
-                t = max(t, tmp2[i].start_time) + tmp2[i].trip_time;
-                if (i < tmp2.size() - 1) {
-                    t += dist[tmp2[i].destination][tmp2[i + 1].source];
-                }
-            } else {
-                ok = false;
-                assert(i <= 1);
-                break;
-            }
-        }
-        if (ok) {
-			total_satisfied_ond_value += request.trip_time;
-			satisfied_ond ++;
-            drivers[driver].missions.insert(drivers[driver].missions.begin() + drivers[driver].finished_work, request);
-            return true;
-        }
-    }
-    return false;
-}
-
-bool assign_to_driver_impatient(const SimpleRequest &request, const int &driver, const int &T) {
-    vector<SimpleRequest> tmp;
-    for (int i = drivers[driver].finished_work; i < drivers[driver].missions.size(); i ++) {
-        tmp.push_back(drivers[driver].missions[i]);
-    }
-    tmp.insert(tmp.begin(), request);
-    return isLegalSequence_impatient(request, tmp, driver, T);
-}
-
 void arrange_drivers_pre() {
     // any pre-algorithm here
     if (stage1mode == "first-fit") {
@@ -1227,230 +1248,10 @@ void arrange_drivers_pre() {
 	}
 }
 
-void arrange_drivers_ond(const int &T, const SimpleRequest &request) {
-    for (int i = 0; i < driver_num; i ++) {
-        if (assign_to_driver_impatient(request, i, T)) return;
-    }
-}
-
-void simulation() {
-	puts("We are using normal algorithm in stage-2.\n");
-    while (!que.empty()) que.pop();
-    for (int i = 0; i < driver_num; i ++) {
-        Event e;
-        e.type = 1;
-        e.number = i;
-        e.time = driver_time[i];
-        que.push(e);
-        drivers[i].type = 0;
-        drivers[i].u = drivers[i].u;
-        drivers[i].v = -1;
-        drivers[i].length = -1;
-    }
-    // ond_num = 50;
-    for (int i = 0; i < ond_num; i ++) {
-        Event e;
-        e.type = 0;
-        e.number = i;
-        e.time = ond_requests[i].start_time;
-        que.push(e);
-    }
-
-    if (DEBUG) {
-        // printf("Distance map:\n");
-        // for (int i = 0; i < regions; i ++) {
-        // 	for (int j = 0; j < regions; j ++) {
-        // 		printf("%d\t", dist[i][j]);
-        // 	}
-        // 	printf("\n");
-        // }
-
-        // for (int i = 0; i < driver_num; i ++) {
-        // 	printf("Driver %d: mission number: %d\n", i, int(drivers[i].missions.size()));
-        // 	printf("start_region %d: start_time: %d\n", driver_src[i], driver_time[i]);
-        // 	for (int j = 0; j < drivers[i].missions.size(); j ++) {
-        // 		SimpleRequest sr = drivers[i].missions[j];
-        // 		printf("source: %d\tdestination: %d\tstart time: %d\twaiting time: %d\ttrip time: %d\n", sr.source, sr.destination, sr.start_time, sr.waiting_time, sr.trip_time);
-        // 	}
-        // }
-
-        // for (int i = 0; i < ond_num; i ++) {
-        // 	SimpleRequest sr = ond_requests[i];
-        // 	printf("On Demand Request %02d: \n", i);
-        // 	printf("source: %d\tdestination: %d\tstart time: %d\twaiting time: %d\ttrip time: %d\tadvanced time: %d\n", sr.source, sr.destination, sr.start_time, sr.waiting_time, sr.trip_time, sr.advanced_time);
-        // }
-    }
-
-    satisfied_ond = 0;
-    // in one second:
-    //		0.orders occur and assign them
-    //		1.drivers move 1 sec OR stay still
-    for (int T = 0; T < TOTAL_TIME_INTERVAL; T ++) {
-        if (T > 0 && T % (3600 / TIME_STEP) == 0) printf("Hour : %d\n", T / TIME_STEP);
-        while (que.top().time == T) {
-            Event e = que.top();
-            que.pop();
-            if (e.type == 0) {
-                // handle the orders
-                // if (e.number == ) printf("%d\n", e.number);
-                arrange_drivers_ond(T, ond_requests[e.number]);
-            } else if (e.type == 1) {
-                // handle the drivers
-                int driver = e.number;
-                if (remainedMission(driver) == 0) {
-                    // No work for now. Don't move.
-                    assert(drivers[driver].v == -1 && drivers[driver].length == -1);
-                    Event e2 = e;
-                    e2.time ++;
-                    que.push(e2);
-                } else if (drivers[driver].v != -1 && drivers[driver].length > 1) {
-                    // running on road
-                    Event e2 = e;
-                    e2.time ++;
-                    drivers[driver].length --;
-                    que.push(e2);
-                } else if (drivers[driver].v != -1 && drivers[driver].length == 1) { // A driver is about to finish one's trip towards a source/destination.
-                    Event e2 = e;
-                    e2.time ++;
-                    // pick up the passenger
-                    SimpleRequest request;
-                    if (remainedMission(driver) != 0) {
-                        request = drivers[driver].missions[drivers[driver].finished_work];
-                    }
-                    if (drivers[driver].type == 0 && drivers[driver].v == request.source) {
-                        if (e2.time < request.start_time) {
-                            // early arrival
-                            drivers[driver].type = 0;
-                            drivers[driver].u = request.source;
-                            drivers[driver].v = -1;
-                            drivers[driver].length = -1;
-                        } else {
-                            // pick up successfully
-                            // if (DEBUG && driver == 3015) {
-                            // 	printf("%d\n", driver_time[driver]);
-                            // 	printf("Hurry Pick-up driver %d Time %d Request %d\n", driver, T, request.order);
-                            // 	printMissions(driver);
-                            // 	printf("-------source: %d\tdestination: %d\tstart time: %d\twaiting time: %d\ttrip time: %d\n", request.source, request.destination, request.start_time, request.waiting_time, request.trip_time);
-                            // }
-                            // if (!(e2.time - 1 <= request.start_time + request.waiting_time)) {
-                            // }
-                            assert(e2.time - 1 <= request.start_time);
-                            drivers[driver].type = 1;
-                            drivers[driver].u = request.source;
-                            drivers[driver].v = request.destination;
-                            drivers[driver].length = request.trip_time - 1;
-							if (drivers[driver].length == 0) {
-	                            drivers[driver].type = 0;
-	                            drivers[driver].u = request.destination;
-	                            drivers[driver].v = -1;
-								drivers[driver].length = -1;
-							}
-                        }
-                    } else if (drivers[driver].type == 0 && drivers[driver].v != request.source) {
-                        // change the target
-                        drivers[driver].type = 0;
-                        drivers[driver].u = drivers[driver].v;
-                        drivers[driver].v = request.source;
-                        drivers[driver].length = dist[drivers[driver].u][drivers[driver].v];
-                    } else if (drivers[driver].type == 1) {
-                        // drop off the passenger
-                        drivers[driver].type = 0;
-                        drivers[driver].finished_work ++;
-                        if (remainedMission(driver) == 0) {
-                            // no more work now, stay in v
-                            drivers[driver].u = drivers[driver].v;
-                            drivers[driver].v = -1;
-                            drivers[driver].length = -1;
-                        } else {
-                            // has other missions
-                            // TODO maybe change the logic here
-                            if (drivers[driver].v != drivers[driver].missions[drivers[driver].finished_work].source) {
-                                drivers[driver].u = drivers[driver].v;
-                                drivers[driver].v = drivers[driver].missions[drivers[driver].finished_work].source;
-                                drivers[driver].length = calc_time(drivers[driver].u, drivers[driver].v); // ???
-                            } else {
-                                drivers[driver].u = drivers[driver].v;
-                                drivers[driver].v = -1;
-                                drivers[driver].length = -1;
-                            }
-                            // if (driver == 29 && drivers[driver].missions[drivers[driver].finished_work - 1].order == 217) {
-                            // 	printf("-----------------I AM HERE. TIME IS %d\n", T);
-                            // 	printf("-----------------I AM HERE. u IS %d\n", drivers[driver].u);
-                            // 	printf("-----------------I AM HERE. v IS %d\n", drivers[driver].v);
-                            // 	printf("-----------------I AM HERE. length IS %d\n", drivers[driver].length);
-                            // }
-                        }
-                        if (!(request.isPre)) satisfied_ond ++;
-                    } else {
-                        printf("\n-----IMPOSSIBLE1-----\n");
-                    }
-                    que.push(e2);
-                } else if (drivers[driver].v != -1 && drivers[driver].length == 0) {
-                    // Special case : only happens in such case that a driver reverses when he just left
-                    Event e2 = e;
-                    e2.time ++;
-                    SimpleRequest request = drivers[driver].missions[drivers[driver].finished_work];
-                    if (drivers[driver].type == 0 && drivers[driver].v == request.source) { // pick up the passenger TODO
-                        drivers[driver].type = 1;
-                        drivers[driver].u = request.source;
-                        drivers[driver].v = request.destination;
-                        drivers[driver].length = request.trip_time - 1;
-                    } else if (drivers[driver].type == 0 && drivers[driver].v != request.source) { // change the target
-                        drivers[driver].type = 0;
-                        drivers[driver].u = drivers[driver].v;
-                        drivers[driver].v = request.source;
-                        drivers[driver].length = dist[drivers[driver].u][drivers[driver].v] - 1;
-                    } else {
-						assert(false);
-                        if (DEBUG) {
-                            printf("Waiting Pick-up driver %d Time %d Request %d\n", driver, T, request.order);
-                            printMissions(driver);
-                            printf("-------source: %d\tdestination: %d\tstart time: %d\twaiting time: %d\ttrip time: %d\n", request.source, request.destination, request.start_time, request.waiting_time, request.trip_time);
-                        }
-                        printf("\n-----IMPOSSIBLE2-----\n");
-						assert(false);
-                    }
-                    que.push(e2);
-                } else if (drivers[driver].v == -1 && drivers[driver].length == -1) {
-                    // A car is waiting at u
-                    Event e2 = e;
-                    e2.time ++;
-                    assert(drivers[driver].type == 0 && remainedMission(driver) != 0);
-                    SimpleRequest request = drivers[driver].missions[drivers[driver].finished_work];
-                    if (drivers[driver].u != request.source) {
-                        drivers[driver].type = 0;
-                        drivers[driver].v = request.source;
-                        drivers[driver].length = dist[drivers[driver].u][request.source] - 1;
-                    } else if (e2.time - 1 >= drivers[driver].missions[drivers[driver].finished_work].start_time) {
-                        // if (DEBUG && driver == 25) {
-                        // 	printf("Waiting Pick-up driver %d Time %d Request %d\n", driver, T, request.order);
-                        // 	printMissions(driver);
-                        // 	printf("-------source: %d\tdestination: %d\tstart time: %d\twaiting time: %d\ttrip time: %d\n", request.source, request.destination, request.start_time, request.waiting_time, request.trip_time);
-                        // }
-                        assert(e2.time - 1 <= request.start_time + request.waiting_time);
-                        drivers[driver].type = 1;
-                        drivers[driver].u = request.source;
-                        drivers[driver].v = request.destination;
-                        drivers[driver].length = request.trip_time - 1;
-                    }
-                    que.push(e2);
-                }
-            }
-        }
-    }
-	puts("Performance:--------------------");
-    printf("We have handled %d on-demand requests of all the %d on-demand requests. "
-           "Percentage: %.2f%%.\n", satisfied_ond, ond_num, double(100.0 * satisfied_ond / ond_num));
-    printf("We have handled %d values of all the %d values in on-demand requests. "
-           "Percentage: %.2f%%.\n", total_satisfied_ond_value, total_ond_value, double(100.0 * total_satisfied_ond_value / total_ond_value));
-}
-
 void arrange() {
 	sample_in_distribution();
     arrange_drivers_pre();
-    if (stage2mode == "normal") {
-	    simulation(); // only for file now; need to fix later
-	} else if (stage2mode == "MDP") {
+    if (stage2mode == "MDP") {
 	    simulation_MDP();
     } else if (stage2mode == "KM") {
 	    simulation_KM();
@@ -1469,28 +1270,32 @@ double calc_mu() {
 
 int main() {
     random_engine.seed(seed);
+    random_engine2.seed(seed);
     load_data(mode);
-	pair<double, double> performance = make_pair(0., 0.);
+	double performance = 0.;
     int avg_pre_num = 0;
     int avg_ond_num = 0;
     int avg_pre_value = 0;
     int avg_ond_value = 0;
+	double fbh = -1;
 	for (times = 0; times < TOTAL_TIMES; times ++) {
-		printf("\nRound %d:\n", times);
-		arrange();
-		performance.first += total_satisfied_pre_value;
-		performance.second += total_satisfied_ond_value;
-        avg_pre_num += pre_num;
-        avg_ond_num += ond_num;
-        avg_pre_value += total_pre_value;
-        avg_ond_value += total_ond_value;
-        cout << "AVG pre number : " << avg_pre_num / (times + 1) << endl;
-        cout << "AVG pre value : " << avg_pre_value / (times + 1) << endl;
-        cout << "AVG ond number : " << avg_ond_num / (times + 1) << endl;
-        cout << "AVG ond value : " << avg_ond_value / (times + 1) << endl;
-		cout << "pre-scheduled stage-1 Avg : " << performance.first / (times + 1) << endl;
-		cout << "on demand stage-2 Avg : " << performance.second / (times + 1) << endl;
-		puts("random value weak rejection");
+        if (isOutputMode) printf("\nRound %d:\n", times);
+		sample_in_distribution();
+		performance = 0;
+		for (int times2 = 0; times2 < TIMES_FOR_ONE_DISTRIBUTION; times2 ++) {
+			reset_for_same_distribution();
+		    arrange_drivers_pre();
+			double CR = 1.0 * offline_value / total_satisfied_pre_value;
+			performance += CR;
+	        // avg_pre_num += pre_num;
+	        // avg_pre_value += total_pre_value;
+			double mu = calc_mu();
+			cout << "offline value = " << offline_value << "\tonline value = " << total_satisfied_pre_value << endl;
+			cout << "CR = " << CR << " 4 * mu - 1 = " << 4.0 * mu - 1 << endl;
+		}
+		cout << "Avg CR for this distribution : " << performance / TIMES_FOR_ONE_DISTRIBUTION << endl;
 	}
     return 0;
 }
+// 4 43 34
+
